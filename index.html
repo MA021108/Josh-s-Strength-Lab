@@ -91,10 +91,27 @@
   .empty{ text-align:center; color:var(--text-muted); padding:50px 20px 24px; font-size:14px; line-height:1.6; }
   .empty .display{ color:var(--text); font-size:18px; display:block; margin-bottom:6px; }
 
-  nav.bottom{ position:fixed; bottom:0; left:0; right:0; z-index:6; background:var(--surface); border-top:1px solid var(--border); display:flex; padding-bottom:env(safe-area-inset-bottom); }
+  nav.bottom{ position:fixed; bottom:0; left:0; right:0; z-index:6; background:var(--surface); border-top:1px solid var(--border); display:flex; padding-bottom:env(safe-area-inset-bottom); transition:transform 0.28s ease; transform:translateY(0); }
+  nav.bottom.nav-hidden{ transform:translateY(100%); }
   nav.bottom button{ flex:1; background:none; border:none; color:var(--text-muted); padding:11px 0 9px; display:flex; flex-direction:column; align-items:center; gap:4px; font-size:11px; letter-spacing:0.04em; text-transform:uppercase; font-weight:700; }
   nav.bottom button.active{ color:var(--red); }
   nav.bottom svg{ width:22px; height:22px; }
+
+  .session-timer{ display:flex; align-items:center; gap:10px; background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:12px 14px; margin-bottom:14px; font-size:13px; color:var(--text-muted); }
+  .session-timer .dot{ width:8px; height:8px; border-radius:50%; background:var(--red); flex:none; animation:pulseDot 1.4s infinite; }
+  .session-timer.done .dot{ background:var(--green); animation:none; }
+  .session-timer .time{ margin-left:auto; font-weight:800; color:var(--text); font-size:16px; }
+  @keyframes pulseDot{ 0%,100%{opacity:1;} 50%{opacity:0.25;} }
+
+  .completed-section{ margin-top:16px; }
+  .completed-toggle{ width:100%; display:flex; justify-content:space-between; align-items:center; background:none; border:none; color:var(--text-muted); font-size:12px; text-transform:uppercase; letter-spacing:0.05em; font-weight:700; padding:10px 4px; }
+  .completed-toggle .chevron{ transition:transform 0.2s; }
+  .completed-section.open .chevron{ transform:rotate(180deg); }
+  .completed-list{ display:none; }
+  .completed-section.open .completed-list{ display:block; }
+  .completed-row{ display:flex; align-items:center; gap:10px; padding:10px 6px; border-bottom:1px solid var(--border); font-size:14px; }
+  .completed-row .name{ flex:1; color:var(--text-muted); text-decoration:line-through; }
+  .undo-btn{ background:var(--surface-2); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:6px 12px; font-size:12px; font-weight:700; flex:none; }
 
   .overlay{ position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:20; display:flex; align-items:flex-end; }
   .sheet{ background:var(--surface); width:100%; max-height:82vh; overflow-y:auto; border-radius:20px 20px 0 0; padding:16px 16px calc(20px + env(safe-area-inset-bottom)); border-top:1px solid var(--border); }
@@ -301,10 +318,21 @@
     var key = todayKey();
     var w = state.workouts.find(function(w){ return w.date===key; });
     if(!w){
-      w = {date:key, exercises:[]};
+      w = {date:key, exercises:[], startTime:null, endTime:null};
       state.workouts.unshift(w);
     }
     return w;
+  }
+  function formatDuration(ms){
+    var totalSec = Math.max(0, Math.round(ms/1000));
+    var m = Math.floor(totalSec/60), s = totalSec%60;
+    return String(m)+":"+String(s).padStart(2,"0");
+  }
+  function formatDurationLong(ms){
+    var totalMin = Math.round(ms/60000);
+    if(totalMin<1) return "<1 min";
+    var h = Math.floor(totalMin/60), m = totalMin%60;
+    return h>0 ? (h+"h "+m+"m") : (m+" min");
   }
   function exerciseById(id){ return state.exercises.find(function(e){ return e.id===id; }); }
   function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
@@ -334,6 +362,7 @@
   /* ---------------- Nav ---------------- */
   var views = {today:"view-today", history:"view-history", progress:"view-progress"};
   function switchView(name){
+    stopSessionTimerTick();
     Object.keys(views).forEach(function(k){
       document.getElementById(views[k]).classList.toggle("hide", k!==name);
     });
@@ -349,8 +378,31 @@
   });
   document.getElementById("headerDate").textContent = fmtDate(todayKey());
 
+  /* auto-hide bottom nav on scroll down, reveal on scroll up */
+  (function(){
+    var navEl = document.querySelector("nav.bottom");
+    var lastY = window.scrollY || window.pageYOffset;
+    var ticking = false;
+    window.addEventListener("scroll", function(){
+      if(ticking) return;
+      ticking = true;
+      window.requestAnimationFrame(function(){
+        var curY = window.scrollY || window.pageYOffset;
+        if(curY > lastY && curY > 80){ navEl.classList.add("nav-hidden"); }
+        else { navEl.classList.remove("nav-hidden"); }
+        lastY = curY;
+        ticking = false;
+      });
+    }, {passive:true});
+  })();
+
   /* ---------------- TODAY VIEW ---------------- */
+  var sessionTimerHandle = null;
+  function stopSessionTimerTick(){
+    if(sessionTimerHandle){ clearInterval(sessionTimerHandle); sessionTimerHandle=null; }
+  }
   function renderToday(){
+    stopSessionTimerTick();
     var w = getTodayWorkout();
     var root = document.getElementById("view-today");
     var actionButtons =
@@ -359,14 +411,31 @@
         '<button class="add-ex-btn primary" id="addSessionBtn">+ Add Session</button>'+
       '</div>';
 
+    var timerHtml = "";
+    if(w.startTime){
+      var elapsed = (w.endTime || Date.now()) - w.startTime;
+      var doneCls = w.endTime ? " done" : "";
+      timerHtml = '<div class="session-timer'+doneCls+'" id="sessionTimerBar"><span class="dot"></span>'+
+        '<span>'+(w.endTime ? "Session duration" : "Session in progress")+'</span>'+
+        '<span class="time mono" id="sessionTimerTime">'+formatDuration(elapsed)+'</span></div>';
+    }
+
     if(w.exercises.length===0){
-      root.innerHTML = actionButtons +
+      root.innerHTML = actionButtons + timerHtml +
         '<div class="empty"><span class="display">No sets logged yet</span>Add a single exercise, or load a saved session to pre-fill your plan.</div>';
       bindTodayButtons();
       return;
     }
 
-    var html = w.exercises.map(function(ex, exIdx){
+    var active = [];
+    var completed = [];
+    w.exercises.forEach(function(ex, idx){
+      if(ex.completed) completed.push({ex:ex, idx:idx});
+      else active.push({ex:ex, idx:idx});
+    });
+
+    var activeHtml = active.map(function(item){
+      var ex = item.ex, exIdx = item.idx;
       var exInfo = exerciseById(ex.exerciseId) || {name:"Exercise", cat:"Push"};
       var rowsHtml = ex.slots.map(function(slot, i){
         var isLogged = slot.weight!=null && slot.reps!=null;
@@ -388,10 +457,14 @@
           '<button class="btn small" data-action="log-slot" data-exidx="'+exIdx+'" data-slotidx="'+i+'">Log</button>'+
         '</div>';
       }).join("");
+      var hasLogged = loggedSlots(ex).length>0;
       return '<div class="ex-card" data-exidx="'+exIdx+'">'+
         '<div class="ex-head">'+
           '<span class="cat-dot cat-'+exInfo.cat+'"></span>'+
           '<h3>'+exInfo.name+'</h3>'+
+          (hasLogged ? '<button class="icon-btn" data-action="complete-exercise" data-exidx="'+exIdx+'" aria-label="Mark exercise complete">'+
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>'+
+          '</button>' : '')+
           '<button class="icon-btn" data-action="del-exercise" data-exidx="'+exIdx+'" aria-label="Remove exercise">'+
             '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/></svg>'+
           '</button>'+
@@ -404,9 +477,38 @@
         '</div>'+
       '</div>';
     }).join("");
-    var completeHtml = '<button class="btn" id="completeBtn" style="width:100%;background:var(--green);margin-top:2px;">Session Complete</button>';
-    root.innerHTML = actionButtons + html + completeHtml;
+
+    var allDoneHtml = (w.exercises.length>0 && active.length===0)
+      ? '<div class="empty" style="padding:30px 20px;"><span class="display">All exercises complete</span>Add another exercise, or wrap up the session below.</div>'
+      : "";
+
+    var completedHtml = "";
+    if(completed.length>0){
+      completedHtml = '<div class="completed-section" id="completedSection">'+
+        '<button class="completed-toggle" data-action="toggle-completed">'+
+          '<span>Completed ('+completed.length+')</span>'+
+          '<span class="chevron"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></span>'+
+        '</button>'+
+        '<div class="completed-list">'+
+          completed.map(function(item){
+            var info = exerciseById(item.ex.exerciseId) || {name:"Exercise"};
+            return '<div class="completed-row"><span class="name">'+info.name+'</span>'+
+              '<button class="undo-btn" data-action="undo-exercise" data-exidx="'+item.idx+'">Undo</button></div>';
+          }).join("")+
+        '</div>'+
+      '</div>';
+    }
+
+    var completeHtml = '<button class="btn" id="completeBtn" style="width:100%;background:var(--green);margin-top:14px;">Session Complete</button>';
+    root.innerHTML = actionButtons + timerHtml + activeHtml + allDoneHtml + completedHtml + completeHtml;
     bindTodayButtons();
+
+    if(w.startTime && !w.endTime){
+      sessionTimerHandle = setInterval(function(){
+        var el = document.getElementById("sessionTimerTime");
+        if(el) el.textContent = formatDuration(Date.now() - w.startTime);
+      }, 1000);
+    }
   }
   function bindTodayButtons(){
     var addEx = document.getElementById("addExerciseBtn");
@@ -430,6 +532,7 @@
       var w = getTodayWorkout();
       var ex = w.exercises[exIdx];
       ex.slots.push({targetReps:null, weight:weight, reps:reps, restSec:state.restDefault, ts:Date.now()});
+      if(!w.startTime) w.startTime = Date.now();
       save(); renderToday();
       startRestTimer(exerciseById(ex.exerciseId).name, state.restDefault);
       return;
@@ -447,8 +550,30 @@
       var ex2 = w2.exercises[exIdx2];
       var slot = ex2.slots[slotIdx];
       slot.weight = wVal; slot.reps = rVal; slot.restSec = state.restDefault; slot.ts = Date.now();
+      if(!w2.startTime) w2.startTime = Date.now();
       save(); renderToday();
       startRestTimer(exerciseById(ex2.exerciseId).name, state.restDefault);
+      return;
+    }
+    var completeExBtn = e.target.closest('[data-action="complete-exercise"]');
+    if(completeExBtn){
+      var ceIdx = +completeExBtn.dataset.exidx;
+      var w4 = getTodayWorkout();
+      w4.exercises[ceIdx].completed = true;
+      save(); renderToday();
+      return;
+    }
+    var undoBtn = e.target.closest('[data-action="undo-exercise"]');
+    if(undoBtn){
+      var uIdx = +undoBtn.dataset.exidx;
+      var w5 = getTodayWorkout();
+      w5.exercises[uIdx].completed = false;
+      save(); renderToday();
+      return;
+    }
+    var toggleCompleted = e.target.closest('[data-action="toggle-completed"]');
+    if(toggleCompleted){
+      toggleCompleted.closest(".completed-section").classList.toggle("open");
       return;
     }
     var delBtn = e.target.closest('[data-action="del-exercise"]');
@@ -562,7 +687,7 @@
       if(pick) applySessionToToday(pick.dataset.id);
     });
     document.getElementById("newSessionBtn").addEventListener("click", function(){
-      builderState = {id:null, name:"", exercises:[]};
+      builderState = {id:null, name:"", exercises:[], applyOnSave:true};
       openSessionBuilder();
     });
   }
@@ -583,9 +708,10 @@
   }
 
   /* ---------------- Session Builder ---------------- */
-  var builderState = {id:null, name:"", exercises:[]};
+  var builderState = {id:null, name:"", exercises:[], applyOnSave:true};
   function openSessionBuilder(){
     var modal = document.getElementById("modalRoot");
+    var isEdit = !builderState.applyOnSave;
     var rows = builderState.exercises.map(function(be, i){
       var info = exerciseById(be.exerciseId) || {name:"Exercise", cat:"Push"};
       return '<div class="builder-row">'+
@@ -600,16 +726,19 @@
     modal.innerHTML =
       '<div class="overlay" id="builderOverlay"><div class="sheet">'+
         '<div class="sheet-handle"></div>'+
-        '<h2>New Session</h2>'+
+        (isEdit ? '<button class="subtle-back" id="builderBack">‹ Back to sessions</button>' : '')+
+        '<h2>'+(isEdit ? 'Edit Session' : 'New Session')+'</h2>'+
         '<div class="search-wrap"><input type="text" id="sessName" placeholder="Session name (e.g. Push)" value="'+builderState.name.replace(/"/g,"&quot;")+'"></div>'+
         (builderState.exercises.length ? '<div class="builder-labels"><span>Exercise</span><span>Sets</span><span>Reps</span><span></span></div>' : '')+
         '<div id="builderRows">'+rows+'</div>'+
         '<button class="add-ex-btn" id="builderAddExBtn" style="width:100%;margin:10px 0 16px;">+ Add Exercise</button>'+
-        '<button class="btn" id="saveSessionBtn" style="width:100%;">Save Session &amp; Start</button>'+
+        '<button class="btn" id="saveSessionBtn" style="width:100%;">'+(isEdit ? 'Save Changes' : 'Save Session &amp; Start')+'</button>'+
       '</div></div>';
 
     var overlay = document.getElementById("builderOverlay");
     overlay.addEventListener("click", function(e){ if(e.target===overlay) closeModal(); });
+    var back = document.getElementById("builderBack");
+    if(back) back.addEventListener("click", openManageSessions);
     document.getElementById("sessName").addEventListener("input", function(e){ builderState.name = e.target.value; });
     document.getElementById("builderRows").addEventListener("click", function(e){
       var rm = e.target.closest('[data-action="b-remove"]');
@@ -633,12 +762,17 @@
         id: builderState.id || uid(),
         name: name,
         exercises: builderState.exercises.map(function(be){ return {exerciseId:be.exerciseId, targetSets:be.sets, targetReps:be.reps}; }),
-        lastUsedDate: todayKey()
+        lastUsedDate: builderState.lastUsedDate || todayKey()
       };
       var existingIdx = state.sessions.findIndex(function(s){ return s.id===session.id; });
       if(existingIdx>=0) state.sessions[existingIdx] = session; else state.sessions.push(session);
       save();
-      applySessionToToday(session.id);
+      if(builderState.applyOnSave){
+        applySessionToToday(session.id);
+      } else {
+        closeModal();
+        openManageSessions();
+      }
     });
   }
 
@@ -659,11 +793,15 @@
   ];
   function openSessionComplete(){
     var w = getTodayWorkout();
+    if(!w.endTime) w.endTime = Date.now();
+    save();
+    stopSessionTimerTick();
     var totalSets = w.exercises.reduce(function(a,e){ return a+loggedSlots(e).length; }, 0);
     var totalVolume = w.exercises.reduce(function(a,e){
       return a + loggedSlots(e).reduce(function(b,s){ return b + s.weight*s.reps; }, 0);
     }, 0);
     var exCount = w.exercises.filter(function(e){ return loggedSlots(e).length>0; }).length;
+    var durationStr = w.startTime ? formatDurationLong(w.endTime - w.startTime) : "—";
     var msg = MOTIVATION[Math.floor(Math.random()*MOTIVATION.length)];
     var modal = document.getElementById("modalRoot");
     modal.innerHTML =
@@ -676,13 +814,14 @@
         '<div class="stat-row" style="margin-top:20px;">'+
           '<div class="stat-box"><div class="num mono">'+exCount+'</div><div class="lbl">Exercises</div></div>'+
           '<div class="stat-box"><div class="num mono">'+totalSets+'</div><div class="lbl">Sets</div></div>'+
-          '<div class="stat-box"><div class="num mono">'+Math.round(totalVolume)+'</div><div class="lbl">'+state.unit+' Volume</div></div>'+
+          '<div class="stat-box"><div class="num mono">'+durationStr+'</div><div class="lbl">Duration</div></div>'+
         '</div>'+
-        '<button class="btn" id="completeDoneBtn" style="width:100%;margin-top:22px;">Done</button>'+
+        '<div class="stat-row"><div class="stat-box" style="flex:1;"><div class="num mono">'+Math.round(totalVolume)+'</div><div class="lbl">'+state.unit+' Volume</div></div></div>'+
+        '<button class="btn" id="completeDoneBtn" style="width:100%;margin-top:6px;">Done</button>'+
       '</div></div>';
-    document.getElementById("completeDoneBtn").addEventListener("click", closeModal);
+    document.getElementById("completeDoneBtn").addEventListener("click", function(){ closeModal(); renderToday(); });
     var overlay = document.getElementById("completeOverlay");
-    overlay.addEventListener("click", function(e){ if(e.target===overlay) closeModal(); });
+    overlay.addEventListener("click", function(e){ if(e.target===overlay){ closeModal(); renderToday(); } });
   }
 
   /* ---------------- Rest Timer ---------------- */
@@ -809,12 +948,12 @@
       '<div id="progBody"></div>';
     document.getElementById("progSelect").addEventListener("change", function(e){
       root.dataset.selected = e.target.value;
-      renderProgressBody(e.target.value);
+      renderExerciseProgressBody(e.target.value);
     });
     root.dataset.selected = currentId;
-    renderProgressBody(currentId);
+    renderExerciseProgressBody(currentId);
   }
-  function renderProgressBody(exId){
+  function renderExerciseProgressBody(exId){
     var points = [];
     state.workouts.slice().reverse().forEach(function(w){
       var ex = w.exercises.find(function(e){ return e.exerciseId===exId; });
@@ -838,25 +977,26 @@
       '<div class="stat-box"><div class="num mono">'+latest.est1rm+'</div><div class="lbl">Est. 1RM</div></div>'+
     '</div>';
 
-    var w = 100, h = 100, padX = 6, padY = 10;
-    var minW = Math.min.apply(null, points.map(function(p){ return p.weight; }));
-    var maxW = maxWeight;
-    var range = (maxW-minW) || 1;
+    body.innerHTML = statsHtml + buildLineChartSVG(points.map(function(p){ return {date:p.date, value:p.weight}; }), getComputedAccent());
+  }
+  function getComputedAccent(){
+    try{ return getComputedStyle(document.documentElement).getPropertyValue("--red").trim() || "#17C9D6"; }
+    catch(e){ return "#17C9D6"; }
+  }
+  function buildLineChartSVG(points, colorHex){
+    var w=100, h=100, padX=6, padY=10;
+    var vals = points.map(function(p){ return p.value; });
+    var minV = Math.min.apply(null, vals), maxV = Math.max.apply(null, vals);
+    var range = (maxV-minV) || 1;
     var stepX = points.length>1 ? (w-2*padX)/(points.length-1) : 0;
     function xAt(i){ return padX + i*stepX; }
-    function yAt(val){ return h-padY - ((val-minW)/range)*(h-2*padY); }
-    var pathD = points.map(function(p,i){ return (i===0?"M":"L")+xAt(i).toFixed(1)+","+yAt(p.weight).toFixed(1); }).join(" ");
-    var dots = points.map(function(p,i){
-      return '<circle cx="'+xAt(i).toFixed(1)+'" cy="'+yAt(p.weight).toFixed(1)+'" r="2.2" fill="#17C9D6"></circle>';
-    }).join("");
-    var chartHtml = '<div class="chart-wrap"><svg viewBox="0 0 100 100" style="width:100%;height:180px;" preserveAspectRatio="none">'+
-      '<path d="'+pathD+'" fill="none" stroke="#17C9D6" stroke-width="1.6" vector-effect="non-scaling-stroke"></path>'+
-      dots+
-    '</svg><div class="day-stats" style="margin-top:6px;display:flex;justify-content:space-between;">'+
-      '<span>'+fmtDate(points[0].date)+'</span><span>'+fmtDate(points[points.length-1].date)+'</span>'+
-    '</div></div>';
-
-    body.innerHTML = statsHtml + chartHtml;
+    function yAt(v){ return h-padY - ((v-minV)/range)*(h-2*padY); }
+    var pathD = points.map(function(p,i){ return (i===0?"M":"L")+xAt(i).toFixed(1)+","+yAt(p.value).toFixed(1); }).join(" ");
+    var dots = points.map(function(p,i){ return '<circle cx="'+xAt(i).toFixed(1)+'" cy="'+yAt(p.value).toFixed(1)+'" r="2.2" fill="'+colorHex+'"></circle>'; }).join("");
+    return '<div class="chart-wrap"><svg viewBox="0 0 100 100" style="width:100%;height:160px;" preserveAspectRatio="none">'+
+      '<path d="'+pathD+'" fill="none" stroke="'+colorHex+'" stroke-width="1.6" vector-effect="non-scaling-stroke"></path>'+dots+
+      '</svg><div class="day-stats" style="margin-top:6px;display:flex;justify-content:space-between;">'+
+      '<span>'+fmtDate(points[0].date)+'</span><span>'+fmtDate(points[points.length-1].date)+'</span></div></div>';
   }
 
   /* ---------------- Settings ---------------- */
@@ -948,7 +1088,10 @@
       return state.sessions.map(function(s){
         return '<div class="session-pick" data-id="'+s.id+'">'+
           '<div><div class="s-name">'+s.name+'</div><div class="s-meta">'+s.exercises.length+' exercises · last '+fmtShort(s.lastUsedDate)+'</div></div>'+
-          '<button class="slot-remove" data-action="del-session" data-id="'+s.id+'" style="margin-left:auto;">'+
+          '<span class="chev" style="margin-left:auto;">'+
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>'+
+          '</span>'+
+          '<button class="slot-remove" data-action="del-session" data-id="'+s.id+'" style="margin-left:6px;">'+
             '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/></svg>'+
           '</button>'+
         '</div>';
@@ -970,6 +1113,20 @@
           save();
           document.getElementById("manageRows").innerHTML = rowsHTML();
         }
+        return;
+      }
+      var row = e.target.closest(".session-pick");
+      if(row){
+        var session = state.sessions.find(function(s){ return s.id===row.dataset.id; });
+        if(!session) return;
+        builderState = {
+          id: session.id,
+          name: session.name,
+          exercises: session.exercises.map(function(se){ return {exerciseId:se.exerciseId, sets:se.targetSets, reps:se.targetReps}; }),
+          lastUsedDate: session.lastUsedDate,
+          applyOnSave: false
+        };
+        openSessionBuilder();
       }
     });
   }
