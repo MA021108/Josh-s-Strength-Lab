@@ -136,10 +136,13 @@
   .session-pick .s-meta{ color:var(--text-muted); font-size:12px; }
   .session-pick .chev{ color:var(--text-muted); }
 
-  .builder-row{ display:grid; grid-template-columns:1fr 56px 56px 30px; gap:8px; align-items:center; padding:8px 0; }
+  .builder-row{ display:grid; grid-template-columns:1fr 52px 52px 26px 28px; gap:6px; align-items:center; padding:8px 0; }
   .builder-row .b-name{ font-size:14px; display:flex; align-items:center; gap:8px; }
-  .builder-row input{ padding:8px 6px; text-align:center; font-size:14px; }
-  .builder-labels{ display:grid; grid-template-columns:1fr 56px 56px 30px; gap:8px; padding:0 0 4px; font-size:10.5px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; }
+  .builder-row input{ padding:8px 4px; text-align:center; font-size:14px; }
+  .builder-labels{ display:grid; grid-template-columns:1fr 52px 52px 26px 28px; gap:6px; padding:0 0 4px; font-size:10.5px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; }
+  .move-btns{ display:flex; flex-direction:column; gap:2px; }
+  .move-btns button{ background:var(--surface-2); border:1px solid var(--border); color:var(--text-muted); border-radius:5px; font-size:9px; line-height:1; padding:4px 0; width:100%; }
+  .move-btns button:disabled{ opacity:0.2; }
 
   .timer-overlay{ position:fixed; left:0; right:0; bottom:0; z-index:15; background:var(--surface); border-top:1px solid var(--border); padding:18px 20px calc(18px + env(safe-area-inset-bottom)); display:flex; align-items:center; gap:18px; transform:translateY(0); transition:transform 0.25s ease; }
   .timer-overlay.slide-out{ transform:translateY(110%); }
@@ -714,10 +717,15 @@
     var isEdit = !builderState.applyOnSave;
     var rows = builderState.exercises.map(function(be, i){
       var info = exerciseById(be.exerciseId) || {name:"Exercise", cat:"Push"};
+      var isFirst = i===0, isLast = i===builderState.exercises.length-1;
       return '<div class="builder-row">'+
         '<span class="b-name"><span class="cat-dot cat-'+info.cat+'"></span>'+info.name+'</span>'+
         '<input type="number" min="1" data-role="b-sets" data-idx="'+i+'" value="'+be.sets+'">'+
         '<input type="number" min="1" data-role="b-reps" data-idx="'+i+'" value="'+be.reps+'">'+
+        '<div class="move-btns">'+
+          '<button data-action="b-up" data-idx="'+i+'" '+(isFirst?"disabled":"")+' aria-label="Move up">▲</button>'+
+          '<button data-action="b-down" data-idx="'+i+'" '+(isLast?"disabled":"")+' aria-label="Move down">▼</button>'+
+        '</div>'+
         '<button class="slot-remove" data-action="b-remove" data-idx="'+i+'">'+
           '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>'+
         '</button>'+
@@ -729,7 +737,7 @@
         (isEdit ? '<button class="subtle-back" id="builderBack">‹ Back to sessions</button>' : '')+
         '<h2>'+(isEdit ? 'Edit Session' : 'New Session')+'</h2>'+
         '<div class="search-wrap"><input type="text" id="sessName" placeholder="Session name (e.g. Push)" value="'+builderState.name.replace(/"/g,"&quot;")+'"></div>'+
-        (builderState.exercises.length ? '<div class="builder-labels"><span>Exercise</span><span>Sets</span><span>Reps</span><span></span></div>' : '')+
+        (builderState.exercises.length ? '<div class="builder-labels"><span>Exercise</span><span>Sets</span><span>Reps</span><span></span><span></span></div>' : '')+
         '<div id="builderRows">'+rows+'</div>'+
         '<button class="add-ex-btn" id="builderAddExBtn" style="width:100%;margin:10px 0 16px;">+ Add Exercise</button>'+
         '<button class="btn" id="saveSessionBtn" style="width:100%;">'+(isEdit ? 'Save Changes' : 'Save Session &amp; Start')+'</button>'+
@@ -742,7 +750,25 @@
     document.getElementById("sessName").addEventListener("input", function(e){ builderState.name = e.target.value; });
     document.getElementById("builderRows").addEventListener("click", function(e){
       var rm = e.target.closest('[data-action="b-remove"]');
-      if(rm){ builderState.exercises.splice(+rm.dataset.idx,1); openSessionBuilder(); }
+      if(rm){ builderState.exercises.splice(+rm.dataset.idx,1); openSessionBuilder(); return; }
+      var up = e.target.closest('[data-action="b-up"]');
+      if(up && !up.disabled){
+        var ui = +up.dataset.idx;
+        var tmp = builderState.exercises[ui-1];
+        builderState.exercises[ui-1] = builderState.exercises[ui];
+        builderState.exercises[ui] = tmp;
+        openSessionBuilder();
+        return;
+      }
+      var down = e.target.closest('[data-action="b-down"]');
+      if(down && !down.disabled){
+        var di = +down.dataset.idx;
+        var tmp2 = builderState.exercises[di+1];
+        builderState.exercises[di+1] = builderState.exercises[di];
+        builderState.exercises[di] = tmp2;
+        openSessionBuilder();
+        return;
+      }
     });
     document.getElementById("builderRows").addEventListener("change", function(e){
       var idx = +e.target.dataset.idx;
