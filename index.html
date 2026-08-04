@@ -55,6 +55,11 @@
   .ex-card{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); margin-bottom:14px; overflow:hidden; }
   .ex-card .ex-head{ display:flex; align-items:center; gap:10px; padding:14px 14px 10px; }
   .cat-dot{ width:10px; height:10px; border-radius:50%; flex:none; }
+  .cat-chip-group{ display:flex; gap:10px; }
+  .cat-chip{ width:32px; height:32px; border-radius:50%; border:2px solid transparent; padding:0; flex:none; }
+  .cat-chip.active{ border-color:var(--text); box-shadow:0 0 0 2px var(--surface); }
+  .cat-legend{ display:flex; flex-wrap:wrap; gap:12px; padding:2px 4px 14px; font-size:11.5px; color:var(--text-muted); }
+  .cat-legend span{ display:flex; align-items:center; gap:5px; }
   .cat-Push{ background:var(--red); }
   .cat-Pull{ background:var(--blue); }
   .cat-Legs{ background:var(--green); }
@@ -604,6 +609,7 @@
         '</div>';
       }).join("");
     }
+    var customCat = "Push";
     modal.innerHTML =
       '<div class="overlay" id="pickerOverlay"><div class="sheet">'+
         '<div class="sheet-handle"></div>'+
@@ -613,10 +619,11 @@
         '<div id="exGroups">'+groupsHTML()+'</div>'+
         '<div class="cat-group">'+
           '<div class="cat-label">Custom</div>'+
-          '<div class="add-set-row" style="grid-template-columns:1fr auto;">'+
-            '<input type="text" id="customExName" placeholder="Exercise name">'+
-            '<button class="btn secondary" id="addCustomBtn">Add</button>'+
+          '<input type="text" id="customExName" placeholder="Exercise name" style="margin-bottom:10px;">'+
+          '<div class="cat-chip-group" id="customCatChips" style="margin-bottom:10px;">'+
+            cats.map(function(c){ return '<button class="cat-chip cat-'+c+(c===customCat?' active':'')+'" data-cat="'+c+'" type="button" title="'+c+'"></button>'; }).join("")+
           '</div>'+
+          '<button class="btn secondary" id="addCustomBtn" style="width:100%;">Add</button>'+
         '</div>'+
       '</div></div>';
 
@@ -629,12 +636,18 @@
       var pick = e.target.closest(".ex-pick");
       if(pick) handlePicked(pick.dataset.id, mode);
     });
+    document.getElementById("customCatChips").addEventListener("click", function(e){
+      var chip = e.target.closest(".cat-chip");
+      if(!chip) return;
+      customCat = chip.dataset.cat;
+      document.querySelectorAll("#customCatChips .cat-chip").forEach(function(c){ c.classList.toggle("active", c===chip); });
+    });
     document.getElementById("addCustomBtn").addEventListener("click", function(){
       var input = document.getElementById("customExName");
       var name = input.value.trim();
-      if(!name) return;
+      if(!name){ input.focus(); return; }
       var id = uid();
-      state.exercises.push({id:id, name:name, cat:"Push", custom:true});
+      state.exercises.push({id:id, name:name, cat:customCat, custom:true});
       save();
       handlePicked(id, mode);
     });
@@ -1039,6 +1052,7 @@
         '<div class="field-row"><label>Default rest</label>'+
           '<input type="number" id="restInput" style="width:90px;text-align:right;" value="'+state.restDefault+'"> </div>'+
         '<div class="field-row"><label>Manage sessions</label><button class="btn secondary" id="manageSessBtn">Edit</button></div>'+
+        '<div class="field-row"><label>Manage exercises</label><button class="btn secondary" id="manageExBtn">Edit</button></div>'+
         '<div class="field-row"><label>Export data</label><button class="btn secondary" id="exportBtn">Download JSON</button></div>'+
         '<div class="field-row"><label>Import data</label><button class="btn secondary" id="importBtn">Upload JSON</button></div>'+
         '<input type="file" id="importFile" accept="application/json,.json" style="display:none;">'+
@@ -1090,6 +1104,7 @@
       e.target.value = "";
     });
     document.getElementById("manageSessBtn").addEventListener("click", openManageSessions);
+    document.getElementById("manageExBtn").addEventListener("click", openManageExercises);
     document.getElementById("exportBtn").addEventListener("click", function(){
       var blob = new Blob([JSON.stringify(state, null, 2)], {type:"application/json"});
       var url = URL.createObjectURL(blob);
@@ -1154,6 +1169,51 @@
         };
         openSessionBuilder();
       }
+    });
+  }
+
+  function openManageExercises(){
+    var modal = document.getElementById("modalRoot");
+    var cats = ["Push","Pull","Legs","Core"];
+    function rowsHTML(filter){
+      filter = (filter||"").toLowerCase();
+      var list = state.exercises
+        .filter(function(ex){ return ex.name.toLowerCase().indexOf(filter)>=0; })
+        .slice()
+        .sort(function(a,b){ return a.name.localeCompare(b.name); });
+      if(list.length===0) return '<div class="empty" style="padding:20px 10px;">No exercises match.</div>';
+      return list.map(function(ex){
+        return '<div class="exercise-manage-row" data-id="'+ex.id+'" style="display:flex;align-items:center;gap:10px;padding:11px 4px;border-bottom:1px solid var(--border);">'+
+          '<span style="flex:1;font-size:14px;">'+ex.name+'</span>'+
+          '<div class="cat-chip-group">'+
+            cats.map(function(c){ return '<button class="cat-chip cat-'+c+(c===ex.cat?' active':'')+'" data-action="set-cat" data-id="'+ex.id+'" data-cat="'+c+'" type="button" title="'+c+'"></button>'; }).join("")+
+          '</div>'+
+        '</div>';
+      }).join("");
+    }
+    modal.innerHTML =
+      '<div class="overlay" id="manageExOverlay"><div class="sheet">'+
+        '<div class="sheet-handle"></div>'+
+        '<h2>Manage Exercises</h2>'+
+        '<div class="cat-legend">'+
+          cats.map(function(c){ return '<span><span class="cat-dot cat-'+c+'"></span>'+c+'</span>'; }).join("")+
+        '</div>'+
+        '<div class="search-wrap"><input type="text" id="manageExSearch" placeholder="Search exercises..."></div>'+
+        '<div id="manageExRows">'+rowsHTML()+'</div>'+
+      '</div></div>';
+    var overlay = document.getElementById("manageExOverlay");
+    overlay.addEventListener("click", function(e){ if(e.target===overlay) closeModal(); });
+    document.getElementById("manageExSearch").addEventListener("input", function(e){
+      document.getElementById("manageExRows").innerHTML = rowsHTML(e.target.value);
+    });
+    document.getElementById("manageExRows").addEventListener("click", function(e){
+      var chip = e.target.closest('[data-action="set-cat"]');
+      if(!chip) return;
+      var ex = exerciseById(chip.dataset.id);
+      if(!ex) return;
+      ex.cat = chip.dataset.cat;
+      save();
+      document.getElementById("manageExRows").innerHTML = rowsHTML(document.getElementById("manageExSearch").value);
     });
   }
 
